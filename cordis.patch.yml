@@ -1,0 +1,3 @@
+- insert:
+    - id: no-project-sessions
+      name: 'dsh-no-project-sessions'

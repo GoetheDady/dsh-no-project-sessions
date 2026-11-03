@@ -1,0 +1,177 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import vm from 'node:vm';
+
+const clientSource = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+function createRuntime({ fetchImpl, summary = {} } = {}) {
+  const cleanups = [];
+  const fetchCalls = [];
+  const originalCalls = [];
+  const conversation = {
+    sendSession: async (...args) => {
+      originalCalls.push(args);
+      return { sent: true, args };
+    },
+  };
+  const context = {
+    console,
+    AbortController,
+    fetch: async (path, init) => {
+      fetchCalls.push({ path, init });
+      return fetchImpl(path, init);
+    },
+    window: undefined,
+    setTimeout,
+    clearTimeout,
+  };
+  context.window = context;
+  context.window.__ModuleLoader__ = {
+    load({ factory }) {
+      context.exports = factory((name) => {
+        assert.equal(name, 'react');
+        // Components are registered, never rendered: no custom React renderer.
+        return {};
+      });
+    },
+  };
+  vm.runInNewContext(clientSource, context, { filename: 'lib/client.js' });
+
+  const ctx = {
+    get: (name) => name === 'conversation' ? conversation : undefined,
+    effect: (install, label) => {
+      // Exercise only the sendSession lifecycle. UI effects need the real app,
+      // not a test DOM or React renderer.
+      if (label !== 'no-project-sessions: restore conversation.sendSession') return;
+      const cleanup = install();
+      if (typeof cleanup === 'function') cleanups.push(cleanup);
+    },
+    locale: {
+      register: () => {},
+      bind: () => (key) => key,
+    },
+    sessions: { list: { getSnapshot: () => ({ byId: { session: summary } }) } },
+    workspaces: {},
+    slots: { inject: () => {} },
+    remote: { $host: { home: '/home/test' }, session: { openWorkspacePath: async () => {} } },
+    uiWorkspace: { startSession: async () => {} },
+  };
+  context.exports.apply(ctx);
+
+  return {
+    call: (...args) => conversation.sendSession(...args),
+    cleanup: () => { while (cleanups.length > 0) cleanups.pop()(); },
+    fetchCalls,
+    originalCalls,
+    conversation,
+  };
+}
+
+function scratchSummary() {
+  return { cwd: '/home/test/Documents/dsh', projectionValues: {} };
+}
+
+test('the real exported apply wrapper shares preparation but aborts only one waiter', async () => {
+  const response = deferred();
+  const runtime = createRuntime({
+    fetchImpl: (_path, init) => {
+      assert.equal(init.method, 'POST');
+      assert.equal(init.signal.aborted, false);
+      return response.promise;
+    },
+    summary: scratchSummary(),
+  });
+  const session = { sessionId: 'session' };
+  const first = runtime.call(session, 'first text', [], 'chat');
+  const secondController = new AbortController();
+  const second = runtime.call(session, 'second text', [], 'chat', secondController.signal);
+  assert.equal(runtime.fetchCalls.length, 1);
+  secondController.abort();
+  response.resolve({ ok: true, status: 200, json: async () => ({ path: '/home/test/Documents/dsh/2026-11-03/first-text' }) });
+
+  await assert.rejects(second, (error) => error === secondController.signal.reason);
+  const result = await first;
+  assert.equal(result.sent, true);
+  assert.equal(runtime.originalCalls.length, 1);
+  assert.equal(runtime.originalCalls[0][1], 'first text');
+  assert.equal(runtime.fetchCalls[0].init.signal.aborted, false);
+  runtime.cleanup();
+});
+
+test('the real exported apply wrapper clears failed preparation so a later send retries', async () => {
+  const responses = [
+    Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'temporary failure' }) }),
+    Promise.resolve({ ok: true, status: 200, json: async () => ({ path: '/home/test/Documents/dsh/2026-11-03/retry' }) }),
+  ];
+  const runtime = createRuntime({
+    fetchImpl: () => responses.shift(),
+    summary: scratchSummary(),
+  });
+  const session = { sessionId: 'session' };
+  const failures = await Promise.allSettled([
+    runtime.call(session, 'first'),
+    runtime.call(session, 'second'),
+  ]);
+  assert.equal(runtime.fetchCalls.length, 1);
+  assert.equal(failures[0].status, 'rejected');
+  assert.equal(failures[1].status, 'rejected');
+  assert.match(failures[0].reason.message, /temporary failure/);
+  assert.equal(runtime.originalCalls.length, 0);
+
+  const success = await runtime.call(session, 'retry');
+  assert.equal(success.sent, true);
+  assert.equal(runtime.fetchCalls.length, 2);
+  assert.equal(runtime.originalCalls.length, 1);
+  runtime.cleanup();
+});
+
+test('successful shared preparation forwards both sends and clears its pending entry', async () => {
+  const response = deferred();
+  const runtime = createRuntime({
+    fetchImpl: () => response.promise,
+    summary: scratchSummary(),
+  });
+  const session = { sessionId: 'session' };
+  const first = runtime.call(session, 'first', ['attachment'], 'chat');
+  const second = runtime.call(session, 'second');
+  assert.equal(runtime.fetchCalls.length, 1);
+  assert.equal(runtime.originalCalls.length, 0);
+  response.resolve({ ok: true, status: 200, json: async () => ({ path: '/prepared' }) });
+  await Promise.all([first, second]);
+  assert.equal(runtime.originalCalls.length, 2);
+  assert.equal(runtime.originalCalls[0][1], 'first');
+  assert.deepEqual(runtime.originalCalls[0][2], ['attachment']);
+  assert.equal(runtime.originalCalls[1][1], 'second');
+  // Keep the snapshot stale intentionally: completed promises must not remain
+  // cached. The Host is authoritative and will reuse its committed directory.
+  await runtime.call(session, 'third');
+  assert.equal(runtime.fetchCalls.length, 2);
+  assert.equal(runtime.originalCalls.length, 3);
+  runtime.cleanup();
+});
+
+test('the real exported apply wrapper leaves prepared sessions untouched', async () => {
+  const runtime = createRuntime({
+    fetchImpl: () => { throw new Error('fetch must not run'); },
+    summary: {
+      cwd: '/home/test/Documents/dsh',
+      projectionValues: { workingDirectory: '/home/test/Documents/dsh/2026-11-03/already-prepared' },
+    },
+  });
+  const result = await runtime.call({ sessionId: 'session' }, 'already prepared');
+  assert.equal(result.sent, true);
+  assert.equal(runtime.fetchCalls.length, 0);
+  assert.equal(runtime.originalCalls.length, 1);
+  runtime.cleanup();
+});

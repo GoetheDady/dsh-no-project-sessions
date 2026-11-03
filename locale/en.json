@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "No-project Sessions",
+    "description": "Create a private working directory for sessions that do not belong to a project, and list them under Recent."
+  }
+}
