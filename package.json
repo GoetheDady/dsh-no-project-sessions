@@ -14,7 +14,9 @@
     "url": "https://github.com/GoetheDady/dsh-no-project-sessions/issues"
   },
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "market": "node scripts/market.mjs",
+    "market:check": "node scripts/market.mjs --check"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -30,6 +32,9 @@
     "locale/*.json",
     "icon.svg"
   ],
+  "devDependencies": {
+    "@deepseek-ai/dsh-plugin-market-index": "0.2.1-rc.5"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
