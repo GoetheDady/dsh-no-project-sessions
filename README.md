@@ -28,39 +28,6 @@ git clone git@github.com:GoetheDady/dsh-no-project-sessions.git
 
 插件会把 `<home>/Documents/dsh` 作为无项目会话的草稿根目录，首次启动时自动创建。
 
-## 从插件市场安装
-
-DSH 目前**没有官方公共市场**，只有一个实验性的「自定义插件市场」：它读取你添加的 http(s) 索引源（格式 1 的 JSON），在插件页多出一个**发现**标签页。本仓库把自己上架在这个机制里：
-
-```text
-https://raw.githubusercontent.com/GoetheDady/dsh-no-project-sessions/main/market/index.json
-```
-
-启用方式：
-
-1. 侧栏**插件** → **实验性插件**旁的**更多** → 启用**自定义插件市场**，页面出现**已安装** / **发现**两个标签页。
-2. 在**发现**里添加索引源，粘贴上面的 URL。
-3. 列表里会出现「无项目会话」，点安装即可；安装来源是 `git+https://github.com/GoetheDady/dsh-no-project-sessions.git#<commit>`。
-
-没有这个组合包时，也可以用插件管理器直接装 git 版本：
-
-```bash
-# 在 DSH 会话里让 agent 调用 plugin_manager
-# action: install_bundle, target: git+https://github.com/GoetheDady/dsh-no-project-sessions.git#<40 位 commit>
-```
-
-### 索引怎么维护
-
-`market/index.json` 是手工维护会出错的东西，所以由脚本生成并校验：
-
-```bash
-npm install          # 装上 DSH 自己用的校验器 dsh-plugin-market-index
-npm run market       # 按当前 HEAD 重写 market/index.json
-npm run market:check # 只校验，CI / 提交前用
-```
-
-发版流程：改 `package.json` 的 `version` → commit → 再跑一次 `npm run market` 并把新的 `market/index.json` 一起 commit → push。索引里的 Git 源钉的是 40 位 commit SHA，所以**每次发版都要重建索引**，否则市场里拿到的还是旧 commit。
-
 ## 开发
 
 ```bash
@@ -86,6 +53,4 @@ locale/*.json       插件标题与描述
 cordis.patch.yml    Bundle 入口
 tests/              Node 内置测试
 docs/               验证方法与实测记录
-market/index.json   插件市场索引（格式 1），由 scripts/market.mjs 生成
-scripts/market.mjs  生成并校验市场索引
 ```
