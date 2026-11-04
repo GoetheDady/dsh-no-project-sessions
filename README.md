@@ -4,10 +4,9 @@ DeepSeek Harness 插件：为不属于任何项目的会话自动创建独立工
 
 ## 功能
 
-- **无项目会话**：在空白的新会话上提供「无项目」入口，不需要先选择项目或工作区。
+- **无项目会话**：把空白会话的项目下拉菜单替换为带「不在项目中工作」选项的版本，不必先选项目或工作区。
 - **自动工作目录**：发送第一条消息时，在 `~/Documents/dsh/<YYYY-MM-DD>/` 下根据消息内容创建可读的目录名；重名时自动追加 `-2`、`-3` 等后缀。
 - **侧栏「最近」分区**：使用 Harness 原生 workspace 分组展示这些会话，并将组头样式调整为与「工作区」同级的分区标题。
-- **工作目录状态**：会话头部显示当前工作目录，并可直接在文件管理器中打开。
 - **无侵入**：复用 Harness 的 workspace、session、slot 与主题 token，不替换宿主组件，也不改写其它插件的 DOM。
 
 ## 环境
@@ -15,7 +14,7 @@ DeepSeek Harness 插件：为不属于任何项目的会话自动创建独立工
 - DeepSeek Harness 0.2.x（Desktop / Web）
 - 插件同时包含 Host 与 Client 两半：
   - Host：注册 `POST /dsh-no-project/prepare`，原子地预留目录并提交会话工作目录。
-  - Client：提供「无项目」入口、工作目录展示和「最近」分区标题样式。
+  - Client：替换项目下拉菜单（加入「不在项目中工作」）并提供「最近」分区标题样式。
 
 ## 安装
 
@@ -37,12 +36,21 @@ node --check lib/client.js
 node --check lib/index.js
 ```
 
+## 验证
+
+插件装好之后怎么确认它真的在跑、页面在哪看、哪些东西验证不了，见 [docs/verification.md](docs/verification.md)。要点：
+
+- 三层通道：安装返回值 → Host inspect → Client inspect（会转发进真实页面作答）。
+- 用能力证明，不用截图证明：路由的 `401` / `405`、Slot occupant 的 `active` 才是证据。
+- `Config.listConfigs` 的 `status` **不是**活性；没有已认证标签页时，报告里必须写清「视觉未验证」。
+
 ## 目录
 
 ```text
 lib/index.js        Host half：workspace 注册、目录预留、上传路由
-lib/client.js       Client half：会话入口、工作目录 chip、侧栏「最近」样式
+lib/client.js       Client half：项目下拉增强、侧栏「最近」样式
 locale/*.json       插件标题与描述
 cordis.patch.yml    Bundle 入口
 tests/              Node 内置测试
+docs/               验证方法与实测记录
 ```

@@ -64,7 +64,7 @@ function createRuntime({ fetchImpl, summary = {} } = {}) {
     sessions: { list: { getSnapshot: () => ({ byId: { session: summary } }) } },
     workspaces: {},
     slots: { inject: () => {} },
-    remote: { $host: { home: '/home/test' }, session: { openWorkspacePath: async () => {} } },
+    remote: { $host: { home: '/home/test' } },
     uiWorkspace: { startSession: async () => {} },
   };
   context.exports.apply(ctx);
@@ -158,6 +158,106 @@ test('successful shared preparation forwards both sends and clears its pending e
   await runtime.call(session, 'third');
   assert.equal(runtime.fetchCalls.length, 2);
   assert.equal(runtime.originalCalls.length, 3);
+  runtime.cleanup();
+});
+
+function loadApply() {
+  const context = {
+    console,
+    AbortController,
+    fetch: async () => { throw new Error('fetch must not run'); },
+    window: undefined,
+    setTimeout,
+    clearTimeout,
+  };
+  context.window = context;
+  context.window.__ModuleLoader__ = {
+    load({ factory }) { context.exports = factory(() => ({})); },
+  };
+  vm.runInNewContext(clientSource, context, { filename: 'lib/client.js' });
+  return context.exports.apply;
+}
+
+// Mimics cordis: reading a function property through the traceable proxy returns
+// a fresh shadow method every time, so `conversation.sendSession === wrapper`
+// is never true. Symbol properties are not wrapped.
+function createTraceableConversation(originalCalls) {
+  const target = {
+    sendSession: async (...args) => {
+      originalCalls.push(args);
+      return { sent: true, args };
+    },
+  };
+  return new Proxy(target, {
+    get(object, key) {
+      const value = Reflect.get(object, key);
+      if (typeof key === 'string' && typeof value === 'function') {
+        return function shadowMethod(...args) { return value.apply(this, args); };
+      }
+      return value;
+    },
+  });
+}
+
+function mountInstance(conversation, summary) {
+  let active = true;
+  const cleanups = [];
+  const ctx = {
+    get: (name) => name === 'conversation' ? conversation : undefined,
+    effect: (install, label) => {
+      if (label !== 'no-project-sessions: restore conversation.sendSession') return;
+      const cleanup = install();
+      if (typeof cleanup === 'function') cleanups.push(cleanup);
+    },
+    locale: { register: () => {}, bind: () => (key) => key },
+    get sessions() {
+      if (!active) throw new Error('cannot get required service "sessions" in inactive context');
+      return { list: { getSnapshot: () => ({ byId: { session: summary } }) } };
+    },
+    workspaces: {},
+    slots: { inject: () => {} },
+    remote: { $host: { home: '/home/test' } },
+    uiWorkspace: { startSession: async () => {} },
+  };
+  loadApply()(ctx);
+  return {
+    dispose() {
+      while (cleanups.length > 0) cleanups.pop()();
+      active = false;
+    },
+  };
+}
+
+test('hot reload never leaves a stale wrapper reading an inactive ctx', async () => {
+  const originalCalls = [];
+  const conversation = createTraceableConversation(originalCalls);
+  const prepared = {
+    cwd: '/home/test/Documents/dsh',
+    projectionValues: { workingDirectory: '/home/test/Documents/dsh/2026-11-03/prepared' },
+  };
+  const first = mountInstance(conversation, prepared);
+  first.dispose();
+  const second = mountInstance(conversation, prepared);
+
+  const result = await conversation.sendSession({ sessionId: 'session' }, 'after reload');
+  assert.equal(result.sent, true);
+  assert.equal(originalCalls.length, 1);
+
+  second.dispose();
+  const afterDispose = await conversation.sendSession({ sessionId: 'session' }, 'after dispose');
+  assert.equal(afterDispose.sent, true);
+  assert.equal(originalCalls.length, 2);
+});
+
+test('a real project whose path merely ends in Documents/dsh is not treated as scratch', async () => {
+  const runtime = createRuntime({
+    fetchImpl: () => { throw new Error('fetch must not run'); },
+    summary: { cwd: '/work/proj/Documents/dsh', projectionValues: {} },
+  });
+  const result = await runtime.call({ sessionId: 'session' }, 'hello');
+  assert.equal(result.sent, true);
+  assert.equal(runtime.fetchCalls.length, 0);
+  assert.equal(runtime.originalCalls.length, 1);
   runtime.cleanup();
 });
 
